@@ -1,0 +1,75 @@
+# ---- Load Required Libraries ----
+library(readxl)       
+library(forecast)     
+library(tseries)      
+library(rugarch)     
+library(fBasics)      
+library(FinTS)       
+library(PerformanceAnalytics)
+library(MTS)
+library(zoo)
+
+# ---- Load and Prepare Data ----
+setwd("~/data")
+da <- read_excel("dataset_bk.xlsx", col_names = TRUE)
+
+dates <- as.Date(da$`Date`, format = "%Y-%m-%d")
+st <- zoo(da$ST, order.by = dates)
+
+logchg <- na.omit(diff(log(st)))  # log returns
+logchg_vec <- coredata(logchg)
+
+# ---- Summary Statistics ----
+t.test(logchg)
+windows()
+Acf(logchg_vec)
+Pacf(logchg_vec)
+Box.test(logchg_vec, lag = 20, type = "Ljung")
+
+# ---- Reassign for ARIMA modeling ----
+st <- na.omit(diff(log(st)))  # ensure clean log returns again
+st_n <- coredata(st)
+
+windows()
+Acf(st_n, lag.max = 20, main = "ACF of Log-Returns")
+Pacf(st_n)
+Box.test(st_n, lag = 20, type = "Ljung")
+
+# ---- ARIMA MODELING ----
+m1 <- auto.arima(st_n, ic = "aic")
+summary(m1)
+
+m2 <- auto.arima(st_n, ic = "bic")
+summary(m2)
+
+confint(m1)
+adjrt <- residuals(m1)
+
+# ---- Residual Diagnostics ----
+Box.test(adjrt, lag = 20, type = "Ljung")  
+Box.test(abs(adjrt), lag = 20, type = "Ljung")
+Box.test(adjrt^2, lag = 20, type = "Ljung")
+jarqueberaTest(adjrt)
+archTest(adjrt, lag = 20)
+
+# ---- MA(1) Model for Monte Carlo ----
+fit_ma1 <- Arima(logchg, order = c(0, 0, 1), include.mean = TRUE)
+summary(fit_ma1)
+
+mean_m1= mean(st)
+std_m1= stdev(st)
+last_st <- tail(st, 1)
+
+runs <- 100000
+#simulates future movements and returns the closing price on day 365
+generate.path <- function(){
+  qts <- 4
+  changes <- rnorm(qts,mean_m1,std_m1)
+  sample.path <- cumprod(c(last_st,changes))
+  closing.price <- sample.path[qts+1] #+1 because we add the opening price
+}
+
+mc.closing <- replicate(runs,generate.path())
+
+windows()
+plot(mc.closing,type='l',ylab="ST",xlab="Q",main="Value (100k possible path)")
